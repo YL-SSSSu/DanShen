@@ -4422,6 +4422,94 @@ final class AIChatManager: ObservableObject {
     }
 }
 
+private struct WeatherNetworkTransportError: LocalizedError {
+    let directError: Error
+
+    var errorDescription: String? {
+        "天气服务连接失败，已尝试当前代理和直连。\(directError.localizedDescription)"
+    }
+}
+
+private enum WeatherNetworkTransport {
+    private static let requestTimeout: TimeInterval = 8
+    private static let resourceTimeout: TimeInterval = 12
+    private static let retryableProxyStatusCodes: Set<Int> = [407, 502, 503, 504]
+
+    static func data(from url: URL) async throws -> (Data, URLResponse) {
+        do {
+            let result = try await request(url: url, bypassSystemProxy: false)
+            guard shouldRetryWithoutProxy(response: result.1) else {
+                return result
+            }
+            return try await request(url: url, bypassSystemProxy: true)
+        } catch let systemError {
+            guard !Task.isCancelled, shouldRetryWithoutProxy(error: systemError) else {
+                throw systemError
+            }
+
+            do {
+                return try await request(url: url, bypassSystemProxy: true)
+            } catch let directError {
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
+                throw WeatherNetworkTransportError(directError: directError)
+            }
+        }
+    }
+
+    private static func request(
+        url: URL,
+        bypassSystemProxy: Bool
+    ) async throws -> (Data, URLResponse) {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
+        configuration.waitsForConnectivity = false
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+
+        if bypassSystemProxy {
+            configuration.connectionProxyDictionary = [:]
+        }
+
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+
+        var request = URLRequest(
+            url: url,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: requestTimeout
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return try await session.data(for: request)
+    }
+
+    private static func shouldRetryWithoutProxy(response: URLResponse) -> Bool {
+        guard let response = response as? HTTPURLResponse else { return false }
+        return retryableProxyStatusCodes.contains(response.statusCode)
+    }
+
+    private static func shouldRetryWithoutProxy(error: Error) -> Bool {
+        guard let error = error as? URLError else { return false }
+        return switch error.code {
+        case .timedOut,
+             .cannotFindHost,
+             .cannotConnectToHost,
+             .networkConnectionLost,
+             .dnsLookupFailed,
+             .notConnectedToInternet,
+             .secureConnectionFailed,
+             .cannotLoadFromNetwork,
+             .resourceUnavailable:
+            true
+        default:
+            false
+        }
+    }
+}
+
 private struct WeatherLookupLocation {
     let displayName: String
     let latitude: Double
@@ -4566,6 +4654,7 @@ final class WeatherManager: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private let locationProvider: WeatherLocationProvider
     private var automaticRefreshTask: Task<Void, Never>?
+    private var cachedManualLocation: (key: String, location: WeatherLookupLocation)?
 
     private init() {
         locationProvider = WeatherLocationProvider()
@@ -4704,7 +4793,14 @@ final class WeatherManager: ObservableObject {
             throw FeatureError("请先在设置 > Weather 中填写城市。")
         }
 
-        return try await geocode(city: city)
+        let cacheKey = city.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        if let cachedManualLocation, cachedManualLocation.key == cacheKey {
+            return cachedManualLocation.location
+        }
+
+        let location = try await geocode(city: city)
+        cachedManualLocation = (cacheKey, location)
+        return location
     }
 
     private func geocode(city: String) async throws -> WeatherLookupLocation {
@@ -4720,7 +4816,7 @@ final class WeatherManager: ObservableObject {
             throw FeatureError("天气城市查询地址无效。")
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await WeatherNetworkTransport.data(from: url)
         if let httpResponse = response as? HTTPURLResponse, !(200 ... 299).contains(httpResponse.statusCode) {
             throw FeatureError("天气城市查询失败，状态码 \(httpResponse.statusCode)。")
         }
@@ -4759,7 +4855,7 @@ final class WeatherManager: ObservableObject {
             throw FeatureError("天气预报地址无效。")
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await WeatherNetworkTransport.data(from: url)
         if let httpResponse = response as? HTTPURLResponse, !(200 ... 299).contains(httpResponse.statusCode) {
             throw FeatureError("天气获取失败，状态码 \(httpResponse.statusCode)。")
         }
