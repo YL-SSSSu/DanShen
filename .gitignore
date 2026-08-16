@@ -1,0 +1,67 @@
+# Xcode
+*.xcuserstate
+*.xcuserdata
+*.xcscheme
+*.xcuserdatad
+*.pbxuser
+*.xccheckout
+*.xcscheme
+*.xcplayground
+*.xcuserdatad
+*.xctest
+*.xcuserdata
+*.xcodeproj/xcshareddata/WorkspaceSettings.xcsettings
+
+# CocoaPods
+Pods/
+podfile.lock
+
+# Carthage
+Carthage/Build/
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# Derived data
+DerivedData/
+
+# Build output
+build/
+*.app
+*.dSYM
+
+# Temporary files
+*.swp
+*.swo
+*.tmp
+*.log
+*.zip
+*.dmg
+*.mp3
+ScreenRecording*
+
+# Other
+*.DS_Store
+*.vscode/
+*.idea/
+.env
+.derivedData/
+teacher_submission/
+community_submission/
+assignment-requirements*
+report.md
+agent-log.md
+AGENTS.md
+智能体/
+
+# User-specific files
+*.xcuserdatad/
+*.xcscheme
+*.xcodeproj/xcuserdata
+*.xcodeproj/project.xcuserdata
+
+# Build artifacts
+*.ipa
+*.xcarchive
+*.dSYM
