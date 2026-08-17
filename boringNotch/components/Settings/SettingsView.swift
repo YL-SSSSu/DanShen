@@ -2317,7 +2317,7 @@ struct WeatherSettings: View {
             } header: {
                 Text("Forecast source")
             } footer: {
-                Text("Weather uses Open-Meteo. Automatic mode uses your current location through macOS Location Services. Manual mode uses the city you enter here.")
+                Text("Weather uses Open-Meteo. Automatic mode uses macOS Location Services; if Apple cannot resolve the city name, BigDataCloud provides a client-side fallback. Manual mode uses the city you enter here.")
                     .multilineTextAlignment(.trailing)
                     .foregroundStyle(.secondary)
                     .font(.caption)

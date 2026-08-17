@@ -76,7 +76,7 @@ scheme.
   data, chat history, calendar content, local documents, or personal knowledge
   base data.
 - AI network requests are sent only to the provider configured by the user.
-- Weather uses Open-Meteo; automatic location is optional.
+- Weather uses Open-Meteo; automatic location is optional. When Apple's geocoder cannot resolve a city name, the app may send the current coordinates to BigDataCloud's client-side reverse-geocoding endpoint as a fallback. Coordinates are not persisted by DanShen.
 - Calendar, Reminders, Location, Accessibility, and Input Monitoring remain
   controlled by macOS permissions.
 

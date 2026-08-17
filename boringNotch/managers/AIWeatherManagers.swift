@@ -4522,8 +4522,10 @@ private final class WeatherLocationProvider: NSObject, @preconcurrency CLLocatio
 
     private let manager = CLLocationManager()
     private let geocoder = CLGeocoder()
+    private let displayNameCacheRadius: CLLocationDistance = 5_000
 
     private var locationContinuation: CheckedContinuation<CLLocation, Error>?
+    private var cachedDisplayName: (location: CLLocation, name: String)?
 
     override init() {
         super.init()
@@ -4597,7 +4599,7 @@ private final class WeatherLocationProvider: NSObject, @preconcurrency CLLocatio
         }
 
         return WeatherLookupLocation(
-            displayName: await reverseGeocodeDisplayName(for: location) ?? "Current location",
+            displayName: await resolvedDisplayName(for: location),
             latitude: location.coordinate.latitude,
             longitude: location.coordinate.longitude
         )
@@ -4625,16 +4627,72 @@ private final class WeatherLocationProvider: NSObject, @preconcurrency CLLocatio
         continuation.resume(throwing: error)
     }
 
+    private func resolvedDisplayName(for location: CLLocation) async -> String {
+        if let cachedDisplayName,
+           location.distance(from: cachedDisplayName.location) <= displayNameCacheRadius
+        {
+            return cachedDisplayName.name
+        }
+
+        if let displayName = await reverseGeocodeDisplayName(for: location) {
+            cachedDisplayName = (location, displayName)
+            return displayName
+        }
+
+        if let displayName = await fallbackReverseGeocodeDisplayName(for: location) {
+            cachedDisplayName = (location, displayName)
+            return displayName
+        }
+
+        return Locale.current.identifier.hasPrefix("zh") ? "当前位置" : "Current location"
+    }
+
     private func reverseGeocodeDisplayName(for location: CLLocation) async -> String? {
         do {
             let placemarks = try await geocoder.reverseGeocodeLocation(location)
             guard let placemark = placemarks.first else { return nil }
-            return [placemark.locality, placemark.administrativeArea, placemark.country]
+            let displayName = [placemark.locality, placemark.administrativeArea, placemark.country]
                 .compactMap { component in
                     guard let component, !component.isEmpty else { return nil }
                     return component
                 }
                 .joined(separator: ", ")
+            return displayName.isEmpty ? nil : displayName
+        } catch {
+            return nil
+        }
+    }
+
+    private func fallbackReverseGeocodeDisplayName(for location: CLLocation) async -> String? {
+        var components = URLComponents(string: "https://api.bigdatacloud.net/data/reverse-geocode-client")
+        components?.queryItems = [
+            URLQueryItem(name: "latitude", value: String(location.coordinate.latitude)),
+            URLQueryItem(name: "longitude", value: String(location.coordinate.longitude)),
+            URLQueryItem(
+                name: "localityLanguage",
+                value: Locale.current.language.languageCode?.identifier ?? "en"
+            ),
+        ]
+
+        guard let url = components?.url else { return nil }
+
+        do {
+            let (data, response) = try await WeatherNetworkTransport.data(from: url)
+            guard let response = response as? HTTPURLResponse,
+                  (200 ... 299).contains(response.statusCode)
+            else {
+                return nil
+            }
+
+            let decoded = try JSONDecoder().decode(WeatherReverseGeocodingResponse.self, from: data)
+            guard let city = decoded.city.nonEmpty ?? decoded.locality.nonEmpty else { return nil }
+
+            var seenComponents = Set<String>()
+            let displayName = [city, decoded.principalSubdivision, decoded.countryName]
+                .compactMap(\.nonEmpty)
+                .filter { seenComponents.insert($0.lowercased()).inserted }
+                .joined(separator: ", ")
+            return displayName.isEmpty ? nil : displayName
         } catch {
             return nil
         }
@@ -5415,6 +5473,13 @@ private struct GeocodingResponse: Decodable {
     let results: [ResultItem]?
 }
 
+private struct WeatherReverseGeocodingResponse: Decodable {
+    let city: String?
+    let locality: String?
+    let principalSubdivision: String?
+    let countryName: String?
+}
+
 private extension String {
     var containsChineseCharacters: Bool {
         unicodeScalars.contains { scalar in
@@ -5425,6 +5490,15 @@ private extension String {
                 return false
             }
         }
+    }
+}
+
+private extension Optional where Wrapped == String {
+    var nonEmpty: String? {
+        guard let value = self?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
     }
 }
 
